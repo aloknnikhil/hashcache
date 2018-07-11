@@ -25,6 +25,10 @@ public:
 
   HashTree(K key, V val) : m_key(key), m_val(val), m_left(nullptr), m_right(nullptr) {}
 
+  /**
+   * BST insertion - O(log n)
+   *
+   */
   static HashTree* insertNode(HashTree* root, const K& key, const V& val) {
     if (root == nullptr) {
       root = new HashTree(key, val);
@@ -37,6 +41,10 @@ public:
     return root;
   }
 
+  /**
+   * BST lookup - O(log n)
+   *
+   */
   static bool getVal(HashTree* root, const K& key, V& val) {
     if (root == nullptr) {
       return false;
@@ -54,6 +62,10 @@ public:
     }
   }
 
+  /**
+   * Get smallest node - O(n)
+   *
+   */
   static HashTree* getSmallestNode(HashTree* root) {
     HashTree* current = root;
     while (current && current->m_left) {
@@ -63,6 +75,10 @@ public:
     return current;
   }
 
+  /**
+   * BST removal - O(log n)
+   *
+   */
   static HashTree* remove(HashTree* root, const K& key) {
     if (root == nullptr) {
       return nullptr;
@@ -93,6 +109,11 @@ public:
     return root;
   }
 
+  /**
+   * BST comparator - O(n)
+   * Input: Function to compare elements with
+   *
+   */
   static HashTree* seekWithComparator(HashTree* root, function<HashTree*(HashTree*, HashTree*)>& comparator) {
     if (root == nullptr) {
       return nullptr;
@@ -105,14 +126,43 @@ public:
     return comparator(comparator(left, right), root);
   }
 };
-
+/**
+ * Cache implementation
+ * Designed to support O(1) insertion, O(1) lookup, O(1) update, O(n) deletion
+ *
+ */
 template <typename K, typename V>
 class Cache {
 protected:
+  /**
+   * Partitions in the cache - Not necesarrily same as number of elements
+   * Increase to have a better average case insertion/lookup performance
+   *
+   */
   static const long NUM_BUCKETS = 1024;
+
+  /**
+   * Maximum number of elements supported by the cache
+   *
+   */
   static const long CACHE_SIZE = 1024;
+
+  /**
+   * Cache partitions - Same as number of slots in the cache if NUM_BUCKETS = CACHE_SIZE
+   *
+   */
   HashTree<K, pair<V, long>>* buckets[NUM_BUCKETS];
+
+  /**
+   * Locks to protect access to a partition
+   *
+   */
   mutex bucketLocks[NUM_BUCKETS];
+
+  /**
+   * Actual number of elements in the cache
+   *
+   */
   atomic<long> cacheSize;
 
   int hashFunc(const K& key) {
@@ -144,7 +194,7 @@ public:
 
   bool put(const K& key, const V& val) {
 
-    if (cacheSize.fetch_add(1) > CACHE_SIZE) {
+    if (cacheSize.fetch_add(1) >= CACHE_SIZE) {
       removeLRU();
     }
 
@@ -154,6 +204,10 @@ public:
     HashTree<K, pair<V, long>>* bucket = buckets[hashVal];
 
     long currentTimeMillis = duration_cast<milliseconds>(system_clock::now().time_since_epoch()).count();
+
+    if (cacheSize.load() == 1) {
+      cout << "First element timestamp " << currentTimeMillis << endl;
+    }
 
     buckets[hashVal] = HashTree<K, pair<V, long>>::insertNode(bucket, key, pair<V, long>(val, currentTimeMillis));
 
@@ -218,8 +272,10 @@ public:
   }
 };
 
-#define MAX_ELEMENTS        5000000
-#define MAX_THREADS         6
+// TEST PROGRAM
+
+#define MAX_ELEMENTS        1024
+#define MAX_THREADS         4
 #define ELEMENTS_PER_THREAD MAX_ELEMENTS/MAX_THREADS
 
 struct Element {
@@ -232,9 +288,13 @@ struct Element {
 };
 
 int main (int argc, char** argv) {
-  Cache<long, shared_ptr<Element>>* hashMap = new Cache<long, shared_ptr<Element>>();
+  Cache<long, shared_ptr<Element>>* cache = new Cache<long, shared_ptr<Element>>();
   vector<int> keys(MAX_ELEMENTS);
 
+  /**
+   * Populates cache with MAX_ELEMENTS
+   *
+   */
   auto insertFunc = [&](int tid) {
     for (int i = (tid * ELEMENTS_PER_THREAD); i < ((tid * ELEMENTS_PER_THREAD) + ELEMENTS_PER_THREAD); i++) {
       if (i >= MAX_ELEMENTS) {
@@ -242,13 +302,17 @@ int main (int argc, char** argv) {
       }
       int randKey = rand();
       keys[i] = randKey;
-      if (!hashMap->put(randKey, make_shared<Element>(i, '\0', randKey))) {
-        cout << "Cache full!" << endl;
+      if (!cache->put(randKey, make_shared<Element>(i, '\0', randKey))) {
+        cout << "Cache full! ERROR!" << endl;
         break;
       }
     }
   };
 
+  /**
+   * Multi-threaded insert into the cache
+   *
+   */
   vector<future<void>> futures;
 
   for (int i = 0; i < MAX_THREADS; i++) {
@@ -260,6 +324,58 @@ int main (int argc, char** argv) {
   }
 
   futures.clear();
+
+  /**
+   * Retrieves from cache and updates element field
+   *
+   */
+  auto updateFunc = [&](int tid) {
+    for (const auto& key : keys) {
+      shared_ptr<Element> element;
+      if (cache->get(key, element)) {
+        element->val3 = rand();
+      } else {
+        cout << "[UPDATE] ERROR! Element " << key << " not found in cache. Possibly evicted?" << endl;
+      }
+    }
+  };
+
+  for (int i = 0; i < MAX_THREADS; i++) {
+    futures.push_back(async(updateFunc, i));
+  }
+
+  for (auto& future : futures) {
+    future.get();
+  }
+
+  futures.clear();
+
+  /**
+   * Removes element from cache
+   *
+   */
+  auto deleteFunc = [&](int tid) {
+    for (const auto& key : keys) {
+      if (!cache->remove(key)) {
+        cout << "[DELETE] ERROR! Element " << key << " not found in cache. Possibly evicted?" << endl;
+      }
+    }
+  };
+
+  // UNCOMMENT BELOW TO TEST SIMULTANEOUS UPDATES & DELETES  
+  /*for (int i = 0; i < MAX_THREADS; i++) {
+    futures.push_back(async(deleteFunc, i));
+  }
+
+  for (int i = 0; i < MAX_THREADS; i++) {
+    futures.push_back(async(updateFunc, i));
+  }
+
+  for (auto& future : futures) {
+    future.get();
+  }
+
+  futures.clear();*/
 
   return 0;
 }
