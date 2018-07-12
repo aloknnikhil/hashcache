@@ -99,7 +99,7 @@ public:
         return temp;
       }
 
-      // Find largest node in the left tree
+      // Find smallest node in the right tree
       HashTree* inOrderSuccessor = getSmallestNode(root->m_right);
       root->m_key = inOrderSuccessor->m_key;
       root->m_val = inOrderSuccessor->m_val;
